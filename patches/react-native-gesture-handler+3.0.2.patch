@@ -1,0 +1,20 @@
+diff --git a/node_modules/react-native-gesture-handler/android/CMakeLists.txt b/node_modules/react-native-gesture-handler/android/CMakeLists.txt
+--- a/node_modules/react-native-gesture-handler/android/CMakeLists.txt
++++ b/node_modules/react-native-gesture-handler/android/CMakeLists.txt
+@@ -24,5 +24,6 @@ target_include_directories(react_codegen_rngesturehandler_codegen PUBLIC ./build/
+ target_link_libraries(
+   react_codegen_rngesturehandler_codegen
++  c++_shared
+   fbjni
+   jsi
+   reactnative
+diff --git a/node_modules/react-native-gesture-handler/android/src/main/jni/CMakeLists.txt b/node_modules/react-native-gesture-handler/android/src/main/jni/CMakeLists.txt
+--- a/node_modules/react-native-gesture-handler/android/src/main/jni/CMakeLists.txt
++++ b/node_modules/react-native-gesture-handler/android/src/main/jni/CMakeLists.txt
+@@ -48,5 +48,6 @@ find_package(fbjni REQUIRED CONFIG)
+ target_link_libraries(
+   ${PACKAGE_NAME}
++  c++_shared
+   ReactAndroid::reactnative
+   ReactAndroid::jsi
+   fbjni::fbjni

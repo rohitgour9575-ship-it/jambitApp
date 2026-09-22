@@ -1,0 +1,10 @@
+diff --git a/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt b/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt
+--- a/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt
++++ b/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt
+@@ -62,5 +62,6 @@ endif()
+ 
+ target_link_libraries(
+   react_codegen_rnsvg
++  c++_shared
+   fbjni
+ )

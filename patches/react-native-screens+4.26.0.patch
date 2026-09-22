@@ -1,0 +1,19 @@
+diff --git a/node_modules/react-native-screens/android/CMakeLists.txt b/node_modules/react-native-screens/android/CMakeLists.txt
+--- a/node_modules/react-native-screens/android/CMakeLists.txt
++++ b/node_modules/react-native-screens/android/CMakeLists.txt
+@@ -34,4 +34,5 @@ find_package(fbjni REQUIRED CONFIG)
+ target_link_libraries(rnscreens
++    c++_shared
+     ReactAndroid::reactnative
+     ReactAndroid::jsi
+     fbjni::fbjni
+diff --git a/node_modules/react-native-screens/android/src/main/jni/CMakeLists.txt b/node_modules/react-native-screens/android/src/main/jni/CMakeLists.txt
+--- a/node_modules/react-native-screens/android/src/main/jni/CMakeLists.txt
++++ b/node_modules/react-native-screens/android/src/main/jni/CMakeLists.txt
+@@ -42,5 +42,6 @@ target_include_directories(
+ target_link_libraries(
+   ${LIB_TARGET_NAME}
++  c++_shared
+   ReactAndroid::reactnative
+   ReactAndroid::jsi
+   fbjni::fbjni

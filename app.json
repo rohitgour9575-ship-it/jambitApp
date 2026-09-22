@@ -1,0 +1,42 @@
+{
+  "name": "JambIt",
+  "displayName": "JambIt",
+  "expo": {
+    "owner": "kabir5687",
+    "name": "JambIt",
+    "slug": "jambit",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "ios": {
+      "bundleIdentifier": "com.jambit",
+      "appleTeamId": "PKN8GA6YJW",
+      "googleServicesFile": "./ios/Jambit/GoogleService-Info.plist",
+      "buildNumber": "2",
+      "supportsTablet": true,
+      "infoPlist": {
+        "CFBundleURLTypes": [
+          {
+            "CFBundleTypeRole": "Editor",
+            "CFBundleURLSchemes": [
+              "com.googleusercontent.apps.585462712555-33htrgfok9urbnsp48pca150pli1aml9"
+            ]
+          }
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        },
+        "NSLocationWhenInUseUsageDescription": "JambIt uses your location to show local events, groups, and saved addresses."
+      }
+    },
+    "android": {
+      "package": "com.jambit",
+      "versionCode": 1
+    },
+    "extra": {
+      "eas": {
+        "projectId": "7f5ff167-d1f3-4ba6-8739-8cb1f60878f7"
+      }
+    }
+  }
+}
