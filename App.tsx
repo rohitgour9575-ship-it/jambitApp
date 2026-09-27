@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   BackHandler,
   Easing,
@@ -41,6 +42,7 @@ import {
   ArrowLeft,
   Eye,
   EyeOff,
+  FileText,
   Flag,
   Gamepad2,
   GraduationCap,
@@ -56,6 +58,7 @@ import {
   MapPin,
   MessageCircle,
   MoreHorizontal,
+  MoreVertical,
   Music2,
   Palette,
   PartyPopper,
@@ -67,6 +70,7 @@ import {
   Send,
   Settings,
   Share2,
+  ShieldAlert,
   Sparkles,
   TentTree,
   TicketCheck,
@@ -78,6 +82,7 @@ import {
   UserPlus,
   Users,
   UsersRound,
+  UserX,
   X,
 } from 'lucide-react-native';
 import { GoogleSignin, isErrorWithCode } from '@react-native-google-signin/google-signin';
@@ -181,6 +186,14 @@ import {
   JambitUser,
   PublicUserProfilePayload,
 } from './src/types';
+import {
+  blockUser,
+  getBlockedUserIds,
+  subscribeToBlockedUsers,
+  unblockUser,
+} from './src/moderation/userModeration';
+import { TermsOfUseModal, PrivacyPolicyModal } from './src/ui/LegalModals';
+import { ReportContentModal, BlockedUsersModal } from './src/ui/ModerationModals';
 
 const showVisualBackButton = Platform.OS === 'ios';
 
@@ -832,7 +845,31 @@ function AppContent() {
   }, []);
 
   const signedInUser = session?.user || null;
-  const discoverableEvents = useMemo(() => events.filter(isDiscoverableEvent), [events]);
+  const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    getBlockedUserIds().then((ids) => setBlockedUserIds(new Set(ids)));
+    const unsubscribe = subscribeToBlockedUsers((ids) => setBlockedUserIds(new Set(ids)));
+    return () => unsubscribe();
+  }, []);
+
+  const visibleEvents = useMemo(() => {
+    if (blockedUserIds.size === 0) return events;
+    return events.filter((e) => {
+      const creatorId = e.creator?.id || (typeof e.host === 'object' ? e.host?.id : undefined);
+      return !creatorId || !blockedUserIds.has(String(creatorId));
+    });
+  }, [events, blockedUserIds]);
+
+  const visibleGroups = useMemo(() => {
+    if (blockedUserIds.size === 0) return groups;
+    return groups.filter((g) => {
+      const creatorId = g.creator?.id || (typeof g.host === 'object' ? g.host?.id : undefined);
+      return !creatorId || !blockedUserIds.has(String(creatorId));
+    });
+  }, [groups, blockedUserIds]);
+
+  const discoverableEvents = useMemo(() => visibleEvents.filter(isDiscoverableEvent), [visibleEvents]);
 
   const refreshNotifications = useCallback(async (activeToken?: string) => {
     if (!activeToken) {
@@ -1358,8 +1395,8 @@ function AppContent() {
                   <MainShell
                     user={signedInUser}
                     route={activeRoute}
-                    events={events}
-                    groups={groups}
+                    events={visibleEvents}
+                    groups={visibleGroups}
                     discoveryGroups={discoveryGroups}
                     selectedGroup={selectedGroup}
                     creationDrafts={creationDrafts}
@@ -1746,9 +1783,11 @@ function MainShell({
             <GroupDetailScreen
               group={selectedGroup || groups[0]}
               events={events}
+              sessionToken={sessionToken}
               onBack={onBackRoute}
               onCreateEvent={onCreateEvent}
               onOpenEvent={onOpenEvent}
+              onToast={onToast}
             />
           )
         )}
@@ -4802,6 +4841,20 @@ function MessagesScreen({
   const activeConversation = conversations.find((item) => item.friend.id === activeFriendId) || null;
   const activeFriend = activeConversation?.friend || null;
   const activeFriendOnline = onlineUserIds.has(String(activeFriendId));
+  const [blockedChatUserIds, setBlockedChatUserIds] = useState<Set<string>>(() => new Set());
+  const [reportingUser, setReportingUser] = useState<JambitFriend | null>(null);
+
+  useEffect(() => {
+    getBlockedUserIds().then((ids) => setBlockedChatUserIds(new Set(ids)));
+    const unsubscribe = subscribeToBlockedUsers((ids) => setBlockedChatUserIds(new Set(ids)));
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (activeFriendId && blockedChatUserIds.has(String(activeFriendId))) {
+      setActiveFriendId('');
+    }
+  }, [activeFriendId, blockedChatUserIds]);
 
   const openConversation = useCallback((friendId: string) => {
     setMessages([]);
@@ -4813,16 +4866,24 @@ function MessagesScreen({
 
   const filteredConversations = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return query
-      ? conversations.filter((item) => `${item.friend.name} ${item.friend.city || ''}`.toLowerCase().includes(query))
-      : conversations;
-  }, [conversations, searchQuery]);
+    return conversations
+      .filter((item) => !blockedChatUserIds.has(String(item.friend.id)))
+      .filter((item) =>
+        query
+          ? `${item.friend.name} ${item.friend.city || ''}`.toLowerCase().includes(query)
+          : true,
+      );
+  }, [conversations, searchQuery, blockedChatUserIds]);
   const filteredRequests = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return query
-      ? requests.filter((item) => `${item.name} ${item.city || ''}`.toLowerCase().includes(query))
-      : requests;
-  }, [requests, searchQuery]);
+    return requests
+      .filter((item) => !blockedChatUserIds.has(String(item.id)))
+      .filter((item) =>
+        query
+          ? `${item.name} ${item.city || ''}`.toLowerCase().includes(query)
+          : true,
+      );
+  }, [requests, searchQuery, blockedChatUserIds]);
   const totalUnread = useMemo(
     () => conversations.reduce((total, item) => total + Number(item.unreadCount || 0), 0),
     [conversations],
@@ -5163,6 +5224,48 @@ function MessagesScreen({
               </Text>
             </View>
           </Pressable>
+          <Pressable
+            accessibilityLabel="Chat options"
+            accessibilityRole="button"
+            hitSlop={10}
+            style={styles.chatHeaderMenuButton}
+            onPress={() => {
+              Alert.alert(
+                activeFriend.name,
+                'Safety & Moderation Options',
+                [
+                  {
+                    text: 'Report User',
+                    onPress: () => setReportingUser(activeFriend),
+                  },
+                  {
+                    text: 'Block User',
+                    style: 'destructive',
+                    onPress: () => {
+                      Alert.alert(
+                        'Block User',
+                        `Are you sure you want to block ${activeFriend.name}? All messages and events will be hidden from your view immediately.`,
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Block User',
+                            style: 'destructive',
+                            onPress: async () => {
+                              await blockUser(activeFriend.id, activeFriend.name);
+                              setActiveFriendId('');
+                              onToast(`${activeFriend.name} has been blocked.`, 'info');
+                            },
+                          },
+                        ]
+                      );
+                    },
+                  },
+                  { text: 'Cancel', style: 'cancel' },
+                ]
+              );
+            }}>
+            <MoreVertical color={colors.ink} size={20} strokeWidth={2.5} />
+          </Pressable>
         </View>
 
         <FlatList
@@ -5257,6 +5360,21 @@ function MessagesScreen({
             <Send color={colors.surface} size={19} strokeWidth={2.7} />
           </Pressable>
         </View>
+
+        <ReportContentModal
+          visible={Boolean(reportingUser)}
+          contentType="chat"
+          contentId={activeConversationId || activeFriend.id}
+          contentTitle={`Conversation with ${activeFriend.name}`}
+          reportedUserId={activeFriend.id}
+          reportedUserName={activeFriend.name}
+          sessionToken={sessionToken}
+          onClose={() => setReportingUser(null)}
+          onSuccess={(msg) => onToast(msg, 'success')}
+          onUserBlocked={() => {
+            setActiveFriendId('');
+          }}
+        />
       </KeyboardAvoidingView>
     );
   }
@@ -5526,6 +5644,9 @@ function ProfileScreen({
   const [activePanel, setActivePanel] = useState<ProfileSettingsPanelName | null>(null);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const [showBlockedUsersModal, setShowBlockedUsersModal] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
 
   const confirmAccountDeletion = async () => {
     if (deletingAccount) return;
@@ -5651,6 +5772,9 @@ function ProfileScreen({
         <SettingsRow icon={<Settings size={20} color={colors.muted} />} label="Account management" onPress={() => setActivePanel('account')} />
         <SettingsRow icon={<User size={20} color={colors.muted} />} label="Personal info" onPress={() => setActivePanel('personal')} />
         <SettingsRow icon={<Heart size={20} color={colors.muted} />} label="Interests" onPress={() => setActivePanel('interests')} />
+        <SettingsRow icon={<UserX size={20} color={colors.coral} />} label="Blocked users" onPress={() => setShowBlockedUsersModal(true)} />
+        <SettingsRow icon={<ShieldAlert size={20} color={colors.brand} />} label="Terms of Use (EULA)" onPress={() => setShowTermsModal(true)} />
+        <SettingsRow icon={<FileText size={20} color={colors.muted} />} label="Privacy Policy" onPress={() => setShowPrivacyModal(true)} />
         {Platform.OS === 'ios' ? (
           <SettingsRow
             destructive
@@ -5662,6 +5786,19 @@ function ProfileScreen({
         <SettingsRow icon={<LogOut size={20} color={colors.muted} />} label="Log out" onPress={onLogout} />
       </View>
       </ScrollView>
+
+      <BlockedUsersModal
+        visible={showBlockedUsersModal}
+        onClose={() => setShowBlockedUsersModal(false)}
+      />
+      <TermsOfUseModal
+        visible={showTermsModal}
+        onClose={() => setShowTermsModal(false)}
+      />
+      <PrivacyPolicyModal
+        visible={showPrivacyModal}
+        onClose={() => setShowPrivacyModal(false)}
+      />
 
       <Modal
         visible={Platform.OS === 'ios' && showDeleteConfirmation}
@@ -5819,6 +5956,9 @@ function AuthFlow({
   const [signupPlaceSuggestions, setSignupPlaceSuggestions] = useState<PlaceSuggestion[]>([]);
   const [signupPlaceStatus, setSignupPlaceStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [signupAgeConfirmed, setSignupAgeConfirmed] = useState(false);
+  const [signupTermsAgreed, setSignupTermsAgreed] = useState(false);
+  const [showTermsModal, setShowTermsModal] = useState(false);
+  const [showPrivacyModal, setShowPrivacyModal] = useState(false);
   const [signupToken, setSignupToken] = useState('');
   const [signupVerificationEmail, setSignupVerificationEmail] = useState('');
   const [signupOtp, setSignupOtp] = useState('');
@@ -6033,6 +6173,11 @@ function AuthFlow({
       return;
     }
 
+    if (!signupTermsAgreed) {
+      onToast('You must agree to the Terms of Use (EULA) and Privacy Policy.', 'error');
+      return;
+    }
+
     setLoading(true);
     try {
       const payload = await startEmailSignup({
@@ -6214,16 +6359,20 @@ function AuthFlow({
             <Text style={styles.authEntryTitle}>The people platform.</Text>
 
             <View style={styles.authActionStack}>
-              <Pressable style={styles.authSocialButton} onPress={handleGoogleLogin} disabled={loading}>
-                {loading ? <ActivityIndicator color={colors.coral} /> : <GoogleIcon size={22} />}
-                <Text style={styles.authSocialButtonText}>Continue with Google</Text>
-              </Pressable>
+              {Platform.OS !== 'ios' && (
+                <>
+                  <Pressable style={styles.authSocialButton} onPress={handleGoogleLogin} disabled={loading}>
+                    {loading ? <ActivityIndicator color={colors.coral} /> : <GoogleIcon size={22} />}
+                    <Text style={styles.authSocialButtonText}>Continue with Google</Text>
+                  </Pressable>
 
-              <View style={styles.authDividerRow}>
-                <View style={styles.authDividerLine} />
-                <Text style={styles.authDividerLabel}>or</Text>
-                <View style={styles.authDividerLine} />
-              </View>
+                  <View style={styles.authDividerRow}>
+                    <View style={styles.authDividerLine} />
+                    <Text style={styles.authDividerLabel}>or</Text>
+                    <View style={styles.authDividerLine} />
+                  </View>
+                </>
+              )}
 
               <Pressable style={styles.authEmailSignupButton} onPress={handleEmailSignup} disabled={loading}>
                 <Text style={styles.authEmailSignupText}>Sign up with email</Text>
@@ -6231,6 +6380,20 @@ function AuthFlow({
               <Pressable style={styles.authEmailLoginLink} onPress={() => goToAuthStep('login')} disabled={loading}>
                 <Text style={styles.authEmailLoginText}>Log in with email</Text>
               </Pressable>
+
+              <View style={styles.authLegalNoticeWrap}>
+                <Text style={styles.authLegalNoticeText}>
+                  By continuing, you agree to our{' '}
+                  <Text style={styles.authLinkText} onPress={() => setShowTermsModal(true)}>
+                    Terms of Use (EULA)
+                  </Text>{' '}
+                  and{' '}
+                  <Text style={styles.authLinkText} onPress={() => setShowPrivacyModal(true)}>
+                    Privacy Policy
+                  </Text>
+                  .
+                </Text>
+              </View>
             </View>
           </View>
           </>
@@ -6290,18 +6453,36 @@ function AuthFlow({
               <Text style={styles.authForgotLink}>Forgot password?</Text>
             </Pressable>
 
-            <View style={styles.authDividerRow}>
-              <View style={styles.authDividerLine} />
-              <Text style={styles.authDividerLabel}>or</Text>
-              <View style={styles.authDividerLine} />
-            </View>
+            {Platform.OS !== 'ios' && (
+              <>
+                <View style={styles.authDividerRow}>
+                  <View style={styles.authDividerLine} />
+                  <Text style={styles.authDividerLabel}>or</Text>
+                  <View style={styles.authDividerLine} />
+                </View>
 
-            <Pressable style={styles.authSocialButton} onPress={handleGoogleLogin} disabled={loading}>
-              <GoogleIcon size={22} />
-              <Text style={styles.authSocialButtonText}>Continue with Google</Text>
-            </Pressable>
+                <Pressable style={styles.authSocialButton} onPress={handleGoogleLogin} disabled={loading}>
+                  <GoogleIcon size={22} />
+                  <Text style={styles.authSocialButtonText}>Continue with Google</Text>
+                </Pressable>
+              </>
+            )}
 
             <AuthFooterAction label="New here?" actionLabel="Sign up" onPress={handleEmailSignup} />
+
+            <View style={styles.authLegalNoticeWrap}>
+              <Text style={styles.authLegalNoticeText}>
+                By signing in, you agree to our{' '}
+                <Text style={styles.authLinkText} onPress={() => setShowTermsModal(true)}>
+                  Terms of Use (EULA)
+                </Text>{' '}
+                and{' '}
+                <Text style={styles.authLinkText} onPress={() => setShowPrivacyModal(true)}>
+                  Privacy Policy
+                </Text>
+                .
+              </Text>
+            </View>
 
           </ScrollView>
         ) : step === 'signup' ? (
@@ -6425,6 +6606,23 @@ function AuthFlow({
                 {signupAgeConfirmed && <Check color={colors.surface} size={16} strokeWidth={3} />}
               </View>
               <Text style={styles.authCheckboxText}>I am at least 18 years old.</Text>
+            </Pressable>
+
+            <Pressable style={styles.authCheckboxRow} onPress={() => setSignupTermsAgreed((value) => !value)}>
+              <View style={[styles.authCheckbox, signupTermsAgreed && styles.authCheckboxActive]}>
+                {signupTermsAgreed && <Check color={colors.surface} size={16} strokeWidth={3} />}
+              </View>
+              <Text style={styles.authCheckboxText}>
+                I agree to the{' '}
+                <Text style={styles.authLinkText} onPress={() => setShowTermsModal(true)}>
+                  Terms of Use (EULA)
+                </Text>{' '}
+                and{' '}
+                <Text style={styles.authLinkText} onPress={() => setShowPrivacyModal(true)}>
+                  Privacy Policy
+                </Text>
+                .
+              </Text>
             </Pressable>
 
             <Pressable style={styles.authDarkPrimaryButton} onPress={handleStartEmailSignup} disabled={loading}>
@@ -6609,6 +6807,17 @@ function AuthFlow({
         )}
         </ScreenTransition>
         </Animated.View>
+
+        <TermsOfUseModal
+          visible={showTermsModal}
+          onClose={() => setShowTermsModal(false)}
+          showAcceptButton={step === 'signup' && !signupTermsAgreed}
+          onAccept={() => setSignupTermsAgreed(true)}
+        />
+        <PrivacyPolicyModal
+          visible={showPrivacyModal}
+          onClose={() => setShowPrivacyModal(false)}
+        />
       </View>
   );
 }
@@ -6677,6 +6886,8 @@ function EventDetailScreen({
   const [commentsError, setCommentsError] = useState('');
   const [commentSubmitting, setCommentSubmitting] = useState(false);
   const [replyingTo, setReplyingTo] = useState<JambitEventComment | null>(null);
+  const [reportingEvent, setReportingEvent] = useState(false);
+  const [reportingComment, setReportingComment] = useState<JambitEventComment | null>(null);
   const [isGoing, setIsGoing] = useState(Boolean(event.isGoing));
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
   const [paymentPhone, setPaymentPhone] = useState('');
@@ -7044,6 +7255,7 @@ function EventDetailScreen({
                   comment={comment}
                   onOpenUser={onOpenUser}
                   onReply={setReplyingTo}
+                  onReport={setReportingComment}
                 />
               ))
             ) : (
@@ -7067,7 +7279,7 @@ function EventDetailScreen({
             </View>
           </View>
 
-          <Pressable style={styles.reportEventRow}>
+          <Pressable style={styles.reportEventRow} onPress={() => setReportingEvent(true)}>
             <Flag color={colors.muted} size={20} strokeWidth={2.5} />
             <Text style={styles.reportEventText}>Report event</Text>
             <ChevronRight color={colors.muted} size={18} strokeWidth={2.6} />
@@ -7153,6 +7365,36 @@ function EventDetailScreen({
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <ReportContentModal
+        visible={reportingEvent}
+        contentType="event"
+        contentId={eventId}
+        contentTitle={event.title}
+        reportedUserId={event.creator?.id || (typeof event.host === 'object' ? event.host?.id : undefined)}
+        reportedUserName={event.host?.name || event.creator?.name}
+        sessionToken={sessionToken}
+        onClose={() => setReportingEvent(false)}
+        onSuccess={(msg) => onToast(msg, 'success')}
+        onUserBlocked={() => {
+          onBack();
+        }}
+      />
+
+      <ReportContentModal
+        visible={Boolean(reportingComment)}
+        contentType="comment"
+        contentId={reportingComment?.id || ''}
+        contentTitle={reportingComment?.body}
+        reportedUserId={reportingComment?.author?.id}
+        reportedUserName={reportingComment?.author?.name}
+        sessionToken={sessionToken}
+        onClose={() => setReportingComment(null)}
+        onSuccess={(msg) => onToast(msg, 'success')}
+        onUserBlocked={(blockedId) => {
+          setComments((prev) => prev.filter((c) => String(c.author?.id) !== String(blockedId)));
+        }}
+      />
     </View>
   );
 }
@@ -7292,11 +7534,13 @@ function EventComment({
   comment,
   onOpenUser,
   onReply,
+  onReport,
   depth = 0,
 }: {
   comment: EventCommentNode;
   onOpenUser: (userId: string) => void;
   onReply: (comment: JambitEventComment) => void;
+  onReport?: (comment: JambitEventComment) => void;
   depth?: number;
 }) {
   const openAuthor = () => {
@@ -7322,9 +7566,16 @@ function EventComment({
             <Text style={styles.commentName}>{comment.author.name}</Text>
           </Pressable>
           <Text style={styles.commentBody}>{comment.body}</Text>
-          <Pressable hitSlop={6} onPress={() => onReply(comment)}>
-            <Text style={styles.commentReplyAction}>Reply</Text>
-          </Pressable>
+          <View style={styles.commentActionRow}>
+            <Pressable hitSlop={6} onPress={() => onReply(comment)}>
+              <Text style={styles.commentReplyAction}>Reply</Text>
+            </Pressable>
+            {onReport && (
+              <Pressable hitSlop={6} onPress={() => onReport(comment)}>
+                <Text style={styles.commentReportAction}>Report</Text>
+              </Pressable>
+            )}
+          </View>
         </View>
       </View>
       {comment.replies.map((reply) => (
@@ -7334,6 +7585,7 @@ function EventComment({
           depth={depth + 1}
           onOpenUser={onOpenUser}
           onReply={onReply}
+          onReport={onReport}
         />
       ))}
     </View>
@@ -7558,6 +7810,7 @@ function PublicProfileScreen({
   const [error, setError] = useState('');
   const [friendStatus, setFriendStatus] = useState<'none' | 'pending-sent' | 'pending-received' | 'accepted'>('none');
   const [friendBusy, setFriendBusy] = useState(false);
+  const [reportingUser, setReportingUser] = useState(false);
   const isOwnProfile = String(currentUser.id || '') === String(userId);
 
   const loadProfile = useCallback(async () => {
@@ -7648,6 +7901,7 @@ function PublicProfileScreen({
   };
 
   return (
+    <>
     <ScrollView
       style={styles.publicProfileScreen}
       showsVerticalScrollIndicator={false}
@@ -7808,7 +8062,55 @@ function PublicProfileScreen({
           <Text style={styles.publicProfileEmptyText}>No public hosted events yet.</Text>
         )}
       </View>
+
+      <View style={styles.publicProfileModerationSection}>
+        <Pressable
+          style={styles.publicProfileReportRow}
+          onPress={() => setReportingUser(true)}>
+          <Flag color={colors.muted} size={17} strokeWidth={2.4} />
+          <Text style={styles.publicProfileReportText}>Report user</Text>
+        </Pressable>
+        <Pressable
+          style={styles.publicProfileBlockRow}
+          onPress={() => {
+            Alert.alert(
+              'Block User',
+              `Are you sure you want to block ${user.name}? You will no longer see their events, groups, comments, or messages, and they cannot contact you.`,
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Block User',
+                  style: 'destructive',
+                  onPress: async () => {
+                    await blockUser(user.id, user.name);
+                    onToast?.(`${user.name} has been blocked.`, 'info');
+                    onBack();
+                  },
+                },
+              ]
+            );
+          }}>
+          <UserX color={colors.coral} size={17} strokeWidth={2.4} />
+          <Text style={styles.publicProfileBlockText}>Block user</Text>
+        </Pressable>
+      </View>
     </ScrollView>
+
+    <ReportContentModal
+      visible={reportingUser}
+      contentType="user"
+      contentId={user.id}
+      contentTitle={user.name}
+      reportedUserId={user.id}
+      reportedUserName={user.name}
+      sessionToken={sessionToken}
+      onClose={() => setReportingUser(false)}
+      onSuccess={(msg) => onToast?.(msg, 'success')}
+      onUserBlocked={() => {
+        onBack();
+      }}
+    />
+    </>
   );
 }
 
@@ -7845,16 +8147,22 @@ function EventHorizontalSection({
 function GroupDetailScreen({
   group,
   events,
+  sessionToken,
   onBack,
   onCreateEvent,
   onOpenEvent,
+  onToast,
 }: {
   group?: JambitGroup;
   events: JambitEvent[];
+  sessionToken?: string;
   onBack: () => boolean;
   onCreateEvent: (group: JambitGroup) => void;
   onOpenEvent: (event: JambitEvent) => void;
+  onToast?: (message: string, tone?: ToastState['tone']) => void;
 }) {
+  const [reportingGroup, setReportingGroup] = useState(false);
+
   if (!group) {
     return (
       <View style={styles.groupDetailEmptyScreen}>
@@ -7980,13 +8288,28 @@ function GroupDetailScreen({
             </View>
           </View>
 
-          <Pressable style={styles.reportEventRow}>
+          <Pressable style={styles.reportEventRow} onPress={() => setReportingGroup(true)}>
             <Flag color={colors.muted} size={20} strokeWidth={2.5} />
             <Text style={styles.reportEventText}>Report group</Text>
             <ChevronRight color={colors.muted} size={18} strokeWidth={2.6} />
           </Pressable>
         </View>
       </ScrollView>
+
+      <ReportContentModal
+        visible={reportingGroup}
+        contentType="group"
+        contentId={String(group.id || group._id || '')}
+        contentTitle={group.name}
+        reportedUserId={group.creator?.id || (typeof group.host === 'object' ? group.host?.id : undefined)}
+        reportedUserName={group.creator?.name || group.host?.name}
+        sessionToken={sessionToken}
+        onClose={() => setReportingGroup(false)}
+        onSuccess={(msg) => onToast?.(msg, 'success')}
+        onUserBlocked={() => {
+          onBack();
+        }}
+      />
     </View>
   );
 }
@@ -12790,6 +13113,23 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     includeFontPadding: true,
   },
+  authLegalNoticeWrap: {
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+  },
+  authLegalNoticeText: {
+    color: colors.muted,
+    fontSize: 12.5,
+    lineHeight: 18,
+    textAlign: 'center',
+    fontFamily: fonts.regular,
+  },
+  authLinkText: {
+    color: colors.brand,
+    fontFamily: fonts.bold,
+    textDecorationLine: 'underline',
+  },
   modalBackdrop: {
     flex: 1,
     justifyContent: 'center',
@@ -13600,13 +13940,25 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '700',
   },
-  commentReplyAction: {
+  commentActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
     marginTop: spacing.sm,
+  },
+  commentReplyAction: {
     color: colors.coral,
     fontFamily: fonts.family,
     fontSize: 11,
     lineHeight: 14,
     fontWeight: '900',
+  },
+  commentReportAction: {
+    color: colors.muted,
+    fontFamily: fonts.family,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '700',
   },
   publicProfileScreen: {
     flex: 1,
@@ -13834,6 +14186,44 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontWeight: '600',
+  },
+  publicProfileModerationSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.lg,
+    marginTop: spacing.xl,
+    paddingTop: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+  },
+  publicProfileReportRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: radius.pill,
+    backgroundColor: colors.cream,
+  },
+  publicProfileReportText: {
+    fontSize: 13,
+    fontFamily: fonts.semibold,
+    color: colors.muted,
+  },
+  publicProfileBlockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: radius.pill,
+    backgroundColor: '#fff0f3',
+  },
+  publicProfileBlockText: {
+    fontSize: 13,
+    fontFamily: fonts.semibold,
+    color: colors.coral,
   },
   publicProfileErrorScreen: {
     alignItems: 'center',
@@ -14293,6 +14683,14 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.line,
   },
   chatBackButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    backgroundColor: colors.cream,
+  },
+  chatHeaderMenuButton: {
     width: 42,
     height: 42,
     alignItems: 'center',
